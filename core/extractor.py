@@ -29,7 +29,12 @@ def extract_action_items(transcript:str)->str:
         "Format as a numbered list. If none found say 'No action items found.'"
     )
 
-    return chain.invoke(transcript)
+    try:
+        return chain.invoke(transcript)
+
+    except Exception as e:
+        print(f"⚠️ Action item extraction failed: {e}")
+        return "Action item extraction unavailable."
 
 
 def extract_key_decisions(transcript: str) -> str:
@@ -38,7 +43,11 @@ def extract_key_decisions(transcript: str) -> str:
         "extract all key decisions made. Format as a numbered list. "
         "If none found say 'No key decisions found.'"
     )
-    return chain.invoke(transcript)
+    try:
+        return chain.invoke(transcript)
+    except Exception as e:
+        print(f"⚠️ Key decision extraction failed: {e}")
+        return "Key decision extraction unavailable."
 
 
 def extract_questions(transcript: str) -> str:
@@ -47,4 +56,9 @@ def extract_questions(transcript: str) -> str:
         "or topics needing follow-up. Format as a numbered list. "
         "If none found say 'No open questions found.'"
     )
-    return chain.invoke(transcript)
+    try:
+        return chain.invoke(transcript)
+
+    except Exception as e:
+        print(f"⚠️ Question extraction failed: {e}")
+        return "Question extraction unavailable because the AI service is rate-limited."
