@@ -1,9 +1,15 @@
 import os
+
 from langchain_mistralai import ChatMistralAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
-from langchain_core.runnables import RunnablePassthrough, RunnableLambda
-from core.vector_store import build_vector_store, load_vector_store, get_retriever
+
+from core.vector_store import (
+    build_vector_store,
+    load_vector_store,
+    get_retriever,
+)
+
 
 def get_llm():
     return ChatMistralAI(
@@ -12,64 +18,25 @@ def get_llm():
         temperature=0.3,
     )
 
+
 def format_docs(docs):
-    return "\n\n".join([doc.page_content for doc in docs])
-
-def build_rag_chain(transcript:str):
-
-    vector_store = build_vector_store(transcript)
-
-    retriever = get_retriever(vector_store, k = 4)
-
-    llm = get_llm()
-
-    prompt = ChatPromptTemplate.from_messages(
-
-        [(
-            "system",
-            """You are an expert meeting assistant. Answer the user's question 
-based ONLY on the meeting transcript context provided below.
-
-If the answer is not found in the context, say: 
-"I could not find this information in the meeting transcript."
-
-Always be concise and precise. If quoting someone, mention it clearly.
-
-Context from meeting transcript:
-{context}""",
-        ),
-        ("human", "{question}"),
-    ]
-    )
-
-    #full LCEL Rag pipeline 
-
-    rag_chain = (
-
-        {"context" : retriever | RunnableLambda(format_docs),
-         "question": RunnablePassthrough()
-         }
-         |prompt|llm|StrOutputParser()
-    )
-
-    return rag_chain
+    return "\n\n".join(doc.page_content for doc in docs)
 
 
-def load_rag_chain():
-    vector_store = load_vector_store()
-    retriever = get_retriever(vector_store)
+def build_generation_chain():
+    """Create the prompt -> LLM -> output parser chain."""
 
-    llm = get_llm()
     prompt = ChatPromptTemplate.from_messages([
         (
             "system",
-            """You are an expert meeting assistant. Answer the user's question 
-based ONLY on the meeting transcript context provided below.
+            """You are an expert meeting assistant.
 
-If the answer is not found in the context, say: 
+Answer the user's question based ONLY on the transcript context provided.
+
+If the answer is not found in the context, say:
 "I could not find this information in the meeting transcript."
 
-Always be concise and precise. If quoting someone, mention it clearly.
+Be concise and precise. If quoting someone, mention it clearly.
 
 Context from meeting transcript:
 {context}""",
@@ -77,31 +44,96 @@ Context from meeting transcript:
         ("human", "{question}"),
     ])
 
-    rag_chain = (
-        {
-            "context":  retriever| RunnableLambda(format_docs),
-            "question": RunnablePassthrough(),
-        }
-        | prompt
-        | llm
-        | StrOutputParser()
+    return prompt | get_llm() | StrOutputParser()
+
+
+def build_rag_chain(transcript: str):
+    """Build a RAG system using the provided transcript."""
+
+    vector_store = build_vector_store(transcript)
+
+    retriever = get_retriever(vector_store, k=4)
+
+    generation_chain = build_generation_chain()
+
+    return {
+        "retriever": retriever,
+        "generation_chain": generation_chain,
+    }
+
+
+def load_rag_chain():
+    """Load an existing vector store and build the RAG system."""
+
+    vector_store = load_vector_store()
+
+    retriever = get_retriever(vector_store, k=4)
+
+    generation_chain = build_generation_chain()
+
+    return {
+        "retriever": retriever,
+        "generation_chain": generation_chain,
+    }
+
+
+def retrieval_fallback(docs):
+    """Return useful transcript content without requiring an LLM."""
+
+    if not docs:
+        return "No relevant information was found in the video transcript."
+
+    response = (
+        "⚠️ AI generation is currently unavailable.\n"
+        "Here is the relevant information retrieved from your video:\n\n"
     )
 
-    return rag_chain
+    for i, doc in enumerate(docs, start=1):
+        response += f"--- Relevant passage {i} ---\n"
+        response += doc.page_content + "\n\n"
+
+    return response
 
 
-def ask_question(rag_chain, question: str) -> str:
-    print(f"Question: {question}")
+def ask_question(rag_system, question: str) -> str:
+    print(f"\nQuestion: {question}")
 
+    retriever = rag_system["retriever"]
+    generation_chain = rag_system["generation_chain"]
+
+    # Step 1: Retrieve relevant transcript chunks
     try:
-        answer = rag_chain.invoke(question)
+        docs = retriever.invoke(question)
+
+        print(f"Retrieved {len(docs)} relevant chunk(s).")
+
+        if not docs:
+            answer = "I could not find relevant information in the video transcript."
+            print(f"Answer: {answer}")
+            return answer
+
+    except Exception as e:
+        print(f"⚠️ Retrieval failed: {e}")
+
+        return "Sorry, I couldn't retrieve information from the video transcript."
+
+    # Step 2: Generate an AI answer using retrieved context
+    try:
+        context = format_docs(docs)
+
+        answer = generation_chain.invoke({
+            "context": context,
+            "question": question,
+        })
+
         print(f"Answer: {answer}")
         return answer
 
     except Exception as e:
-        print(f"⚠️ RAG question answering failed: {e}")
+        print(f"⚠️ AI generation failed: {e}")
 
-        return (
-            "Sorry, I couldn't generate an answer because the AI service "
-            "is currently unavailable. Please try again later."
-        )
+        # Step 3: If the LLM fails, return retrieved content
+        answer = retrieval_fallback(docs)
+
+        print(f"Fallback answer:\n{answer}")
+        return answer
